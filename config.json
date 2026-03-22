@@ -1,0 +1,13 @@
+{
+    "mappings": {
+        "f1": "mute",
+        "f2": "volume_down",
+        "f3": "volume_up",
+        "f4": "stop",
+        "f5": "prev_track",
+        "f6": "play_pause",
+        "f7": "next_track",
+        "f8": "launch_media"
+    },
+    "autostart": true
+}
