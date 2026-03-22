@@ -46,6 +46,9 @@ class TrayApp:
         self.key_mapper = key_mapper
         self.icon = None
         self._config_window = None
+        # Cache autostart state to avoid reading config.json from disk on every menu hover
+        config = load_config()
+        self._autostart_cached = config.get("autostart", False)
 
     def _on_settings(self, icon, item):
         """Ayarlar menüsü tıklandığında."""
@@ -60,9 +63,9 @@ class TrayApp:
 
     def _on_autostart_toggle(self, icon, item):
         """Otomatik başlatma açma/kapatma."""
+        new_val = not self._autostart_cached
+        self._autostart_cached = new_val
         config = load_config()
-        current = config.get("autostart", False)
-        new_val = not current
         config["autostart"] = new_val
         save_config(config)
         set_autostart(new_val)
@@ -70,9 +73,8 @@ class TrayApp:
         icon.update_menu()
 
     def _is_autostart_checked(self, item) -> bool:
-        """Otomatik başlatma durumunu döndürür."""
-        config = load_config()
-        return config.get("autostart", False)
+        """Otomatik başlatma durumunu döndürür (bellekteki cache'den)."""
+        return self._autostart_cached
 
     def _on_quit(self, icon, item):
         """Uygulamadan çıkış."""

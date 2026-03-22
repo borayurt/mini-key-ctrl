@@ -9,6 +9,7 @@ class BackupHandler(FileSystemEventHandler):
     def __init__(self, debounce_seconds=10):
         self.debounce_seconds = debounce_seconds
         self.timer = None
+        self._lock = threading.Lock()
 
     def on_any_event(self, event):
         # Ignore changes inside the .git directory or auto_backup.py itself
@@ -22,13 +23,14 @@ class BackupHandler(FileSystemEventHandler):
         self.trigger_backup()
 
     def trigger_backup(self):
-        # Cancel the previous timer if it exists
-        if self.timer is not None:
-            self.timer.cancel()
-        
-        # Start a new timer to wait before pushing (debounce to avoid multiple commits on single save)
-        self.timer = threading.Timer(self.debounce_seconds, self.perform_backup)
-        self.timer.start()
+        with self._lock:
+            # Cancel the previous timer if it exists
+            if self.timer is not None:
+                self.timer.cancel()
+            
+            # Start a new timer to wait before pushing (debounce to avoid multiple commits on single save)
+            self.timer = threading.Timer(self.debounce_seconds, self.perform_backup)
+            self.timer.start()
 
     def perform_backup(self):
         print("GitHub'a yedekleniyor...")
@@ -39,15 +41,15 @@ class BackupHandler(FileSystemEventHandler):
                 print("Değişiklik yok, yedekleme atlandı.")
                 return
 
-            subprocess.run(['git', 'add', '.'], check=True, capture_output=True)
-            subprocess.run(['git', 'commit', '-m', 'Auto backup: Değişiklikler kaydedildi'], check=True, capture_output=True)
-            subprocess.run(['git', 'push'], check=True, capture_output=True)
+            subprocess.run(['git', 'add', '.'], check=True, capture_output=True, text=True)
+            subprocess.run(['git', 'commit', '-m', 'Auto backup: Değişiklikler kaydedildi'], check=True, capture_output=True, text=True)
+            subprocess.run(['git', 'push'], check=True, capture_output=True, text=True)
             print("✅ Başarıyla GitHub'a yedeklendi!")
             
         except subprocess.CalledProcessError as e:
             print(f"❌ Yedekleme sırasında hata oluştu.")
             if e.stderr:
-                print(f"Detay: {e.stderr.decode('utf-8', errors='ignore')}")
+                print(f"Detay: {e.stderr}")
 
 if __name__ == "__main__":
     path = os.path.dirname(os.path.abspath(__file__))

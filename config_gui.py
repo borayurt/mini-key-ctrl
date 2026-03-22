@@ -101,6 +101,7 @@ class DeckButton:
         self.on_drag_start = on_drag_start
         self.on_drag_end = on_drag_end
         self._dragging = False
+        self._hovered = False
 
         s = self.SIZE
         self.canvas = tk.Canvas(
@@ -159,11 +160,13 @@ class DeckButton:
         )
 
     def _on_enter(self, e):
-        if not self._dragging:
+        if not self._dragging and not self._hovered:
+            self._hovered = True
             self._draw(self.color["hover"])
 
     def _on_leave(self, e):
-        if not self._dragging:
+        if not self._dragging and self._hovered:
+            self._hovered = False
             self._draw(self.color["bg"])
 
     def _on_press(self, e):
@@ -219,6 +222,7 @@ class ConfigWindow:
         self.deck_buttons = {}
         self._drag_source = None
         self._drag_label = None
+        self._last_highlight_target = None
 
     def show(self):
         if self.root is not None:
@@ -370,18 +374,24 @@ class ConfigWindow:
         )
 
     def _drag_motion(self, e):
-        """Sürükleme sırasında hedef butonu vurgula."""
+        """Sürükleme sırasında hedef butonu vurgula (sadece değişen butonları yeniden çizer)."""
         if not self._drag_source:
             return
 
         target = self._find_button_at(e.x_root, e.y_root)
-        for fk, btn in self.deck_buttons.items():
-            if btn == self._drag_source:
-                continue
-            if btn == target:
-                btn.highlight(True)
-            else:
-                btn.highlight(False)
+        # Sadece hedef değiştiyse yeniden çiz
+        if target == self._last_highlight_target:
+            return
+
+        # Önceki hedefi eski haline döndür
+        if self._last_highlight_target and self._last_highlight_target != self._drag_source:
+            self._last_highlight_target.highlight(False)
+
+        # Yeni hedefi vurgula
+        if target and target != self._drag_source:
+            target.highlight(True)
+
+        self._last_highlight_target = target
 
     def _drag_end(self, source_btn, x_root, y_root):
         """Sürükleme bırakıldığında."""
@@ -410,6 +420,7 @@ class ConfigWindow:
             self.status_label.configure(text="Hazır", fg=SUBTLE_COLOR)
 
         self._drag_source = None
+        self._last_highlight_target = None
 
     def _find_button_at(self, x_root, y_root):
         """Ekran koordinatlarına göre buton bulur."""
