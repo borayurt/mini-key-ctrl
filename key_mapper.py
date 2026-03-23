@@ -72,7 +72,7 @@ class KeyMapper:
 
     def _handle_key(self, f_key: str):
         """Bir F tuşuna basıldığında çağrılır (debounce ile)."""
-        now = time.time()
+        now = time.monotonic()
         last = self._last_press.get(f_key, 0)
 
         # Çok hızlı tekrarları yoksay
@@ -93,22 +93,25 @@ class KeyMapper:
                 return
             self._running = True
             self._last_press.clear()
+            self._hooks.clear()
 
             for f_key in F_KEYS:
                 if f_key in self.mappings:
-                    keyboard.on_press_key(
+                    hook = keyboard.on_press_key(
                         f_key,
                         lambda e, fk=f_key: self._handle_key(fk),
                         suppress=True,
                     )
+                    self._hooks.append(hook)
 
     def stop(self):
-        """Tüm hook'ları kaldırır."""
+        """Bu uygulamaya ait tüm hook'ları kaldırır."""
         with self._lock:
             if not self._running:
                 return
             self._running = False
-            keyboard.unhook_all()
+            for hook in self._hooks:
+                keyboard.unhook(hook)
             self._hooks.clear()
 
     def reload(self, new_mappings: dict):
@@ -116,4 +119,3 @@ class KeyMapper:
         self.stop()
         self.mappings = new_mappings
         self.start()
-
