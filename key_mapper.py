@@ -64,7 +64,7 @@ class KeyMapper:
     def _media_worker(self):
         while not self._worker_stop.is_set():
             try:
-                vk_code = self._media_queue.get(timeout=0.1)
+                vk_code = self._media_queue.get(timeout=1.0)
             except queue.Empty:
                 continue
 

@@ -9,8 +9,12 @@ import re
 import threading
 import time
 from ctypes import wintypes
+from functools import lru_cache
 
 from key_mapper import F_KEYS, KeyMapper
+
+# Compile regex once at module level for performance
+_DEVICE_ID_PATTERN = re.compile(r"VID_([0-9A-F]{4}).*PID_([0-9A-F]{4})", re.IGNORECASE)
 
 GENERIC_READ = 0x80000000
 OPEN_EXISTING = 3
@@ -107,8 +111,10 @@ class Handle:
             self.value = 0
 
 
+@lru_cache(maxsize=32)
 def format_device_name(hardware_id: str) -> str:
-    match = re.search(r"VID_([0-9A-F]{4}).*PID_([0-9A-F]{4})", hardware_id, re.IGNORECASE)
+    """Format device name with caching to avoid repeated regex operations."""
+    match = _DEVICE_ID_PATTERN.search(hardware_id)
     if match:
         return f"Klavye VID_{match.group(1).upper()} PID_{match.group(2).upper()}"
     tail = hardware_id.split("#")[-1].strip()
@@ -383,13 +389,13 @@ class DeviceInputBackend:
             if not self.context:
                 break
 
-            device = self.context.wait_for_device(timeout_ms=250)
+            device = self.context.wait_for_device(timeout_ms=500)
             now = time.monotonic()
             if device is None:
                 if now >= refresh_at:
                     self._refresh_devices()
                     self._publish_status()
-                    refresh_at = now + 2.0
+                    refresh_at = now + 5.0
                 continue
 
             if not device.receive():

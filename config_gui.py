@@ -205,6 +205,8 @@ class ConfigWindow:
         self.device_label = None
         self.device_status_label = None
         self.capture_button = None
+        self._bounds_valid = False
+        self._last_configure_time = 0.0
 
     def show(self):
         if self.root is not None:
@@ -394,7 +396,11 @@ class ConfigWindow:
 
     def _on_configure(self, event):
         if event.widget == self.root and self.deck_buttons:
-            self._refresh_button_bounds()
+            import time
+            now = time.time()
+            if now - self._last_configure_time > 0.1:
+                self._bounds_valid = False
+                self._last_configure_time = now
 
     def _show_menu(self, event, deck_btn):
         menu = tk.Menu(self.root, tearoff=0, font=("Segoe UI", 11))

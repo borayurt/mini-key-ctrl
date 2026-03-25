@@ -37,7 +37,10 @@ class TrayApp:
             self.backend.status_callback = self._handle_backend_status
 
     def _handle_backend_status(self, status: dict):
-        self._device_status_text = status["message"]
+        new_text = status["message"]
+        if new_text == self._device_status_text:
+            return
+        self._device_status_text = new_text
         if self.icon:
             try:
                 self.icon.title = f"MiniKeyCtrl - {self._device_status_text}"
