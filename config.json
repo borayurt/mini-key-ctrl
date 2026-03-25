@@ -9,5 +9,6 @@
         "f7": "next_track",
         "f8": "launch_media"
     },
-    "autostart": true
+    "autostart": true,
+    "target_device": null
 }

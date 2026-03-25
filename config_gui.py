@@ -1,5 +1,5 @@
 """
-config_gui.py - 4x2 key mapping window with drag-and-drop support.
+config_gui.py - Configuration window for key mapping and device capture.
 """
 
 import json
@@ -7,6 +7,7 @@ import os
 import tkinter as tk
 from tkinter import messagebox
 
+from device_backend import default_config
 from key_mapper import F_KEYS, MEDIA_ACTION_NAMES
 
 
@@ -50,30 +51,22 @@ TEXT_COLOR = "#cdd6f4"
 SUBTLE_COLOR = "#6c7086"
 BORDER_COLOR = "#313244"
 
-DEFAULT_CONFIG = {
-    "mappings": {
-        "f1": "mute",
-        "f2": "volume_down",
-        "f3": "volume_up",
-        "f4": "prev_track",
-        "f5": "play_pause",
-        "f6": "next_track",
-        "f7": "stop",
-        "f8": "launch_media",
-    },
-    "autostart": True,
-}
-
 
 def load_config() -> dict:
+    defaults = default_config()
     try:
         with open(CONFIG_PATH, "r", encoding="utf-8") as file:
-            return json.load(file)
+            config = json.load(file)
     except (FileNotFoundError, json.JSONDecodeError):
-        return {
-            "mappings": dict(DEFAULT_CONFIG["mappings"]),
-            "autostart": DEFAULT_CONFIG["autostart"],
-        }
+        config = {}
+
+    merged = {
+        "mappings": dict(defaults["mappings"]),
+        "autostart": config.get("autostart", defaults["autostart"]),
+        "target_device": config.get("target_device", defaults["target_device"]),
+    }
+    merged["mappings"].update(config.get("mappings", {}))
+    return merged
 
 
 def save_config(config: dict):
@@ -154,7 +147,7 @@ class DeckButton:
             self._hovered = False
             self._draw(self.color["bg"])
 
-    def _on_press(self, event):
+    def _on_press(self, _event):
         self._dragging = True
         self.on_drag_start(self)
 
@@ -193,19 +186,25 @@ class DeckButton:
     def contains_screen_point(self, x_root, y_root):
         if self._bounds is None:
             self.update_bounds()
-
         x, y, width, height = self._bounds
         return x <= x_root <= x + width and y <= y_root <= y + height
 
 
 class ConfigWindow:
-    def __init__(self, on_save_callback=None):
+    def __init__(self, backend=None, on_save_callback=None):
+        self.backend = backend
         self.on_save_callback = on_save_callback
         self.root = None
         self.deck_buttons = {}
         self._button_list = []
         self._drag_source = None
         self._last_highlight_target = None
+        self._selected_device = None
+        self._capture_job = None
+        self.status_label = None
+        self.device_label = None
+        self.device_status_label = None
+        self.capture_button = None
 
     def show(self):
         if self.root is not None:
@@ -218,6 +217,7 @@ class ConfigWindow:
 
         config = load_config()
         mappings = config.get("mappings", {})
+        self._selected_device = config.get("target_device")
 
         self.root = tk.Tk()
         self.root.title("MiniKeyCtrl")
@@ -232,8 +232,39 @@ class ConfigWindow:
 
         tk.Frame(self.root, bg=BORDER_COLOR, height=1).pack(fill="x", padx=24, pady=(12, 0))
 
+        device_frame = tk.Frame(self.root, bg=BG_COLOR)
+        device_frame.pack(fill="x", padx=24, pady=(12, 0))
+
+        tk.Label(device_frame, text="Tanitilan cihaz", font=("Segoe UI", 10, "bold"), bg=BG_COLOR, fg=TEXT_COLOR).pack(anchor="w")
+        self.device_label = tk.Label(device_frame, font=("Segoe UI", 10), bg=BG_COLOR, fg=SUBTLE_COLOR, anchor="w", justify="left")
+        self.device_label.pack(fill="x", pady=(4, 2))
+
+        self.device_status_label = tk.Label(device_frame, font=("Segoe UI", 9), bg=BG_COLOR, fg=SUBTLE_COLOR, anchor="w", justify="left")
+        self.device_status_label.pack(fill="x", pady=(0, 8))
+
+        capture_row = tk.Frame(device_frame, bg=BG_COLOR)
+        capture_row.pack(fill="x")
+
+        self.capture_button = tk.Button(
+            capture_row,
+            text="Cihaz tani",
+            command=self._start_capture,
+            bg="#89b4fa",
+            fg="#1e1e2e",
+            activebackground="#a0c4fb",
+            activeforeground="#1e1e2e",
+            relief="flat",
+            padx=14,
+            pady=6,
+            cursor="hand2",
+        )
+        self.capture_button.pack(side="left")
+
+        if not self.backend or self.backend.get_driver_error():
+            self.capture_button.configure(state="disabled")
+
         info_bar = tk.Frame(self.root, bg=BG_COLOR)
-        info_bar.pack(fill="x", padx=24, pady=(10, 0))
+        info_bar.pack(fill="x", padx=24, pady=(12, 0))
         tk.Label(
             info_bar,
             text="Tuslari surukleyerek yer degistir veya sag tikla islev sec",
@@ -280,7 +311,7 @@ class ConfigWindow:
         save_btn.configure(cursor="hand2")
 
         total_w = (DeckButton.SIZE * 4) + (6 * 8) + 52
-        total_h = (DeckButton.SIZE * 2) + (6 * 2) + 190
+        total_h = (DeckButton.SIZE * 2) + (6 * 2) + 290
         self.root.geometry(f"{total_w}x{total_h}")
         self.root.update_idletasks()
         self._refresh_button_bounds()
@@ -291,6 +322,7 @@ class ConfigWindow:
         self.root.bind("<B1-Motion>", self._drag_motion)
         self.root.bind("<Configure>", self._on_configure)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+        self._render_device_status()
         self.root.mainloop()
 
     def _draw_save_button(self, canvas, fill_color):
@@ -378,18 +410,87 @@ class ConfigWindow:
         deck_btn.update_action(action)
         self.status_label.configure(text=f"{deck_btn.f_key.upper()} -> {ACTION_SHORT_NAMES[action]}", fg="#89b4fa")
 
+    def _start_capture(self):
+        if not self.backend:
+            return
+
+        if not self.backend.begin_device_capture(timeout_seconds=10):
+            self.status_label.configure(text="Interception hazir degil", fg="#f38ba8")
+            return
+
+        self.status_label.configure(text="Mini klavyede bir tusa basin...", fg="#f9e2af")
+        self.device_status_label.configure(text="Capture aktif: 10 saniye", fg="#f9e2af")
+        self.capture_button.configure(state="disabled")
+        self._poll_capture()
+
+    def _poll_capture(self):
+        if not self.backend or not self.root:
+            return
+
+        snapshot = self.backend.get_capture_snapshot()
+        captured = self.backend.consume_captured_device()
+        if captured:
+            self._selected_device = captured
+            self._render_device_status()
+            self.status_label.configure(text=f"Cihaz secildi: {captured['display_name']}", fg="#a6e3a1")
+            self.capture_button.configure(state="normal")
+            return
+
+        if snapshot["active"]:
+            self.device_status_label.configure(
+                text=f"Capture aktif: {snapshot['remaining_seconds']} saniye",
+                fg="#f9e2af",
+            )
+            self._capture_job = self.root.after(200, self._poll_capture)
+            return
+
+        self._render_device_status()
+        self.status_label.configure(text="Cihaz tani zamani doldu", fg="#f38ba8")
+        self.capture_button.configure(state="normal")
+
+    def _render_device_status(self):
+        if self._selected_device:
+            self.device_label.configure(text=self._selected_device["display_name"], fg=TEXT_COLOR)
+        else:
+            self.device_label.configure(text="Tanitilan cihaz yok", fg=SUBTLE_COLOR)
+
+        if not self.backend:
+            self.device_status_label.configure(text="Backend hazir degil", fg="#f38ba8")
+            return
+
+        driver_error = self.backend.get_driver_error()
+        if driver_error:
+            self.device_status_label.configure(text=driver_error, fg="#f38ba8")
+            return
+
+        status = self.backend.get_status()
+        if self._selected_device and status.get("device", {}).get("id") == self._selected_device.get("id"):
+            color = "#a6e3a1" if status["available"] else "#f9e2af"
+            self.device_status_label.configure(text=status["message"], fg=color)
+            return
+
+        self.device_status_label.configure(
+            text="Kaydetmeden once yeni cihaz secimi uygulanmaz",
+            fg=SUBTLE_COLOR if self._selected_device else "#f9e2af",
+        )
+
     def _save(self):
         config = load_config()
         config["mappings"] = {f_key: deck_btn.action for f_key, deck_btn in self.deck_buttons.items()}
+        config["target_device"] = self._selected_device
         save_config(config)
 
         if self.on_save_callback:
-            self.on_save_callback(config["mappings"])
+            self.on_save_callback(config)
 
         self.status_label.configure(text="Ayarlar kaydedildi", fg="#a6e3a1")
+        self._render_device_status()
         messagebox.showinfo("MiniKeyCtrl", "Ayarlar kaydedildi", parent=self.root)
 
     def _on_close(self):
         if self.root:
+            if self._capture_job:
+                self.root.after_cancel(self._capture_job)
+                self._capture_job = None
             self.root.destroy()
             self.root = None
