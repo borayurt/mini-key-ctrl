@@ -11,14 +11,13 @@ Kullanım:
 Not: Global tuş yakalama için yönetici (admin) hakları gerekebilir.
 """
 
-import sys
-import os
-import json
 import ctypes
+import os
+import sys
 
 from key_mapper import KeyMapper
 from tray_app import TrayApp
-from autostart import set_autostart
+from autostart import is_autostart_enabled, set_autostart
 from config_gui import load_config
 
 
@@ -56,7 +55,8 @@ def main():
     autostart_enabled = config.get("autostart", True)
 
     # Otomatik başlatma ayarını uygula
-    set_autostart(autostart_enabled)
+    if is_autostart_enabled() != autostart_enabled:
+        set_autostart(autostart_enabled)
 
     # Key mapper başlat
     mapper = KeyMapper(mappings)

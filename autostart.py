@@ -1,88 +1,97 @@
 """
-autostart.py - Windows başlangıcında otomatik çalıştırma yönetimi.
+autostart.py - Windows baslangicinda otomatik calistirma yonetimi.
 
-Windows Registry üzerinden HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run
-anahtarını kullanır.
+Windows Registry uzerinden HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run
+anahtarini kullanir.
 """
 
-import sys
 import os
+import sys
 import winreg
 
 APP_NAME = "MiniKeyCtrl"
 REG_PATH = r"Software\Microsoft\Windows\CurrentVersion\Run"
 
 
+def _quote_command_part(path: str) -> str:
+    """Wrap a command path in quotes for safe use in the Run registry."""
+    return f'"{path}"'
+
+
 def _get_executable_path() -> str:
-    """Çalışan script/exe'nin tam yolunu döndürür."""
+    """Return the command that should be stored in the Run registry."""
     if getattr(sys, "frozen", False):
-        # PyInstaller ile paketlenmiş exe
-        return sys.executable
-    else:
-        # Python script olarak çalışıyor - pythonw.exe ile konsol penceresi olmadan
-        run_script = os.path.abspath(os.path.join(os.path.dirname(__file__), "run.pyw"))
-        python_dir = os.path.dirname(sys.executable)
-        pythonw_exe = os.path.join(python_dir, "pythonw.exe")
-        if not os.path.exists(pythonw_exe):
-            pythonw_exe = sys.executable  # fallback
-        return f'"{pythonw_exe}" "{run_script}"'
+        return _quote_command_part(sys.executable)
+
+    run_script = os.path.abspath(os.path.join(os.path.dirname(__file__), "run.pyw"))
+    python_dir = os.path.dirname(sys.executable)
+    pythonw_exe = os.path.join(python_dir, "pythonw.exe")
+    if not os.path.exists(pythonw_exe):
+        pythonw_exe = sys.executable
+
+    return f'{_quote_command_part(pythonw_exe)} {_quote_command_part(run_script)}'
 
 
-def enable_autostart():
-    """Windows başlangıcına programı ekler."""
+def _get_autostart_value() -> str | None:
+    """Return the current Run entry value, if present."""
     try:
-        key = winreg.OpenKey(
-            winreg.HKEY_CURRENT_USER,
-            REG_PATH,
-            0,
-            winreg.KEY_SET_VALUE,
-        )
-        winreg.SetValueEx(key, APP_NAME, 0, winreg.REG_SZ, _get_executable_path())
-        winreg.CloseKey(key)
-        return True
-    except WindowsError:
-        return False
-
-
-def disable_autostart():
-    """Windows başlangıcından programı kaldırır."""
-    try:
-        key = winreg.OpenKey(
-            winreg.HKEY_CURRENT_USER,
-            REG_PATH,
-            0,
-            winreg.KEY_SET_VALUE,
-        )
-        winreg.DeleteValue(key, APP_NAME)
-        winreg.CloseKey(key)
-        return True
-    except FileNotFoundError:
-        return True  # Zaten kayıtlı değil
-    except WindowsError:
-        return False
-
-
-def is_autostart_enabled() -> bool:
-    """Otomatik başlatmanın aktif olup olmadığını kontrol eder."""
-    try:
-        key = winreg.OpenKey(
+        with winreg.OpenKey(
             winreg.HKEY_CURRENT_USER,
             REG_PATH,
             0,
             winreg.KEY_READ,
-        )
-        winreg.QueryValueEx(key, APP_NAME)
-        winreg.CloseKey(key)
+        ) as key:
+            value, _ = winreg.QueryValueEx(key, APP_NAME)
+            return value
+    except FileNotFoundError:
+        return None
+    except OSError:
+        return None
+
+
+def enable_autostart() -> bool:
+    """Add the app to Windows startup."""
+    try:
+        command = _get_executable_path()
+        if _get_autostart_value() == command:
+            return True
+
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            REG_PATH,
+            0,
+            winreg.KEY_SET_VALUE,
+        ) as key:
+            winreg.SetValueEx(key, APP_NAME, 0, winreg.REG_SZ, command)
+        return True
+    except OSError:
+        return False
+
+
+def disable_autostart() -> bool:
+    """Remove the app from Windows startup."""
+    try:
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            REG_PATH,
+            0,
+            winreg.KEY_SET_VALUE,
+        ) as key:
+            winreg.DeleteValue(key, APP_NAME)
         return True
     except FileNotFoundError:
+        return True
+    except OSError:
         return False
-    except WindowsError:
-        return False
+
+
+def is_autostart_enabled() -> bool:
+    """Return whether the current startup command matches this installation."""
+    return _get_autostart_value() == _get_executable_path()
 
 
 def set_autostart(enabled: bool) -> bool:
-    """Otomatik başlatmayı açar veya kapatır."""
+    """Enable or disable autostart."""
     if enabled:
         return enable_autostart()
-    else:
-        return disable_autostart()
+    return disable_autostart()

@@ -1,119 +1,158 @@
 """
-key_mapper.py - F1-F8 tuşlarını multimedya kontrol tuşlarına dönüştürür.
+key_mapper.py - F1-F8 tuslarini multimedya kontrol tuslarina donusturur.
 
-Windows keybd_event API ile medya tuşlarını simüle eder.
+Windows keybd_event API ile medya tuslarini simule eder.
 """
 
 import ctypes
-import keyboard
+import queue
 import threading
 import time
 
-# --- Windows API Tanımları ---
+import keyboard
+
+# --- Windows API Tanimlari ---
 KEYEVENTF_EXTENDEDKEY = 0x0001
 KEYEVENTF_KEYUP = 0x0002
 
-# Virtual Key Codes - Multimedya Tuşları
+# Virtual Key Codes - Multimedya Tuslari
 VK_MEDIA_CODES = {
-    "mute":          0xAD,  # VK_VOLUME_MUTE
-    "volume_down":   0xAE,  # VK_VOLUME_DOWN
-    "volume_up":     0xAF,  # VK_VOLUME_UP
-    "next_track":    0xB0,  # VK_MEDIA_NEXT_TRACK
-    "prev_track":    0xB1,  # VK_MEDIA_PREV_TRACK
-    "stop":          0xB2,  # VK_MEDIA_STOP
-    "play_pause":    0xB3,  # VK_MEDIA_PLAY_PAUSE
-    "launch_media":  0xB5,  # VK_LAUNCH_MEDIA_SELECT
+    "mute": 0xAD,
+    "volume_down": 0xAE,
+    "volume_up": 0xAF,
+    "next_track": 0xB0,
+    "prev_track": 0xB1,
+    "stop": 0xB2,
+    "play_pause": 0xB3,
+    "launch_media": 0xB5,
 }
 
-# Kullanıcı dostu isimler (GUI için)
+# Kullanicı dostu isimler (GUI icin)
 MEDIA_ACTION_NAMES = {
-    "mute":          "🔇 Sessiz (Mute)",
-    "volume_down":   "🔉 Ses Azalt",
-    "volume_up":     "🔊 Ses Artır",
-    "next_track":    "⏭ Sonraki Parça",
-    "prev_track":    "⏮ Önceki Parça",
-    "stop":          "⏹ Durdur",
-    "play_pause":    "⏯ Oynat/Duraklat",
-    "launch_media":  "🎵 Medya Oynatıcı Aç",
+    "mute": "Sessiz (Mute)",
+    "volume_down": "Ses Azalt",
+    "volume_up": "Ses Artir",
+    "next_track": "Sonraki Parca",
+    "prev_track": "Onceki Parca",
+    "stop": "Durdur",
+    "play_pause": "Oynat/Duraklat",
+    "launch_media": "Medya Oynatici Ac",
 }
 
-# Ters eşleme: GUI isimlerinden action key'e
+# Ters esleme: GUI isimlerinden action key'e
 NAME_TO_ACTION = {v: k for k, v in MEDIA_ACTION_NAMES.items()}
 
-# F tuşları listesi
+# F tuslari listesi
 F_KEYS = ["f1", "f2", "f3", "f4", "f5", "f6", "f7", "f8"]
 
 
 def send_media_key(vk_code: int):
-    """Windows keybd_event API ile bir medya tuşu simüle eder (basma + bırakma)."""
-    # Key Down
+    """Windows keybd_event API ile bir medya tusu simule eder (basma + birakma)."""
     ctypes.windll.user32.keybd_event(vk_code, 0, KEYEVENTF_EXTENDEDKEY, 0)
     time.sleep(0.05)
-    # Key Up
-    ctypes.windll.user32.keybd_event(vk_code, 0, KEYEVENTF_EXTENDEDKEY | KEYEVENTF_KEYUP, 0)
+    ctypes.windll.user32.keybd_event(
+        vk_code,
+        0,
+        KEYEVENTF_EXTENDEDKEY | KEYEVENTF_KEYUP,
+        0,
+    )
 
 
 class KeyMapper:
-    """F1-F8 tuşlarını dinleyip multimedya fonksiyonlarına yönlendiren sınıf."""
+    """F1-F8 tuslarini dinleyip multimedya fonksiyonlarina yonlendiren sinif."""
 
-    # Tuş tekrarı arasındaki minimum süre (saniye)
     DEBOUNCE_TIME = 0.15
 
     def __init__(self, mappings: dict):
-        """
-        Args:
-            mappings: {"f1": "mute", "f2": "volume_down", ...} şeklinde eşleme sözlüğü
-        """
         self.mappings = mappings
         self._hooks = []
         self._running = False
         self._lock = threading.Lock()
-        self._last_press = {}  # Her tuşun son basılma zamanı
+        self._last_press = {}
+        self._media_queue = queue.SimpleQueue()
+        self._worker_stop = threading.Event()
+        self._worker_thread = None
+
+    def _media_worker(self):
+        """Medya tusa basma islerini keyboard callback disinda calistirir."""
+        while not self._worker_stop.is_set():
+            try:
+                vk_code = self._media_queue.get(timeout=0.1)
+            except queue.Empty:
+                continue
+
+            if vk_code is None:
+                break
+            send_media_key(vk_code)
+
+    def _ensure_worker(self):
+        if self._worker_thread and self._worker_thread.is_alive():
+            return
+
+        self._worker_stop.clear()
+        self._worker_thread = threading.Thread(
+            target=self._media_worker,
+            name="MiniKeyCtrlMediaWorker",
+            daemon=True,
+        )
+        self._worker_thread.start()
 
     def _handle_key(self, f_key: str):
-        """Bir F tuşuna basıldığında çağrılır (debounce ile)."""
-        now = time.time()
-        last = self._last_press.get(f_key, 0)
+        """Bir F tusuna basildiginda cagrilir (debounce ile)."""
+        now = time.monotonic()
+        last = self._last_press.get(f_key, 0.0)
 
-        # Çok hızlı tekrarları yoksay
         if now - last < self.DEBOUNCE_TIME:
             return
 
         self._last_press[f_key] = now
 
         action = self.mappings.get(f_key)
-        if action and action in VK_MEDIA_CODES:
-            vk = VK_MEDIA_CODES[action]
-            send_media_key(vk)
+        vk_code = VK_MEDIA_CODES.get(action)
+        if vk_code is not None:
+            self._media_queue.put(vk_code)
 
     def start(self):
-        """Tuş dinlemeyi başlatır."""
+        """Tus dinlemeyi baslatir."""
         with self._lock:
             if self._running:
                 return
+
             self._running = True
             self._last_press.clear()
+            self._ensure_worker()
 
             for f_key in F_KEYS:
                 if f_key in self.mappings:
-                    keyboard.on_press_key(
+                    hook = keyboard.on_press_key(
                         f_key,
                         lambda e, fk=f_key: self._handle_key(fk),
                         suppress=True,
                     )
+                    self._hooks.append(hook)
 
     def stop(self):
-        """Tüm hook'ları kaldırır."""
+        """Bu sinifin kaydettigi tum hook'lari kaldirir."""
         with self._lock:
             if not self._running:
                 return
+
             self._running = False
-            keyboard.unhook_all()
+
+            for hook in self._hooks:
+                keyboard.unhook(hook)
             self._hooks.clear()
 
+            self._worker_stop.set()
+            self._media_queue.put(None)
+            worker = self._worker_thread
+            self._worker_thread = None
+
+        if worker and worker.is_alive():
+            worker.join(timeout=0.2)
+
     def reload(self, new_mappings: dict):
-        """Yeni eşlemelerle yeniden başlatır."""
+        """Yeni eslemelerle yeniden baslatir."""
         self.stop()
         self.mappings = new_mappings
         self.start()
-
